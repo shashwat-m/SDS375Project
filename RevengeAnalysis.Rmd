@@ -1,0 +1,239 @@
+---
+title: "Revenge Analysis"
+author: "Shashwat Mishra | sdm4329"
+date: "2025-12-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(hoopR)
+
+box <- load_nba_player_box(seasons = 2003:2024)
+```
+
+```{r}
+
+
+# Broken - Don't Use
+
+
+# Example: find Durant's games vs OKC after the trade
+
+
+# ad_nop_games <- box %>%
+#     filter(athlete_display_name == "Anthony Davis",
+#            team_name == "Lakers",
+#            opponent_team_name == "Pelicans",
+#            season >= 2019) %>%
+#     arrange((game_date))
+# 
+# ad_revenge_game <- ad_nop_games %>% slice(1)
+# 
+# ad_nop_games <- ad_nop_games %>%
+#   mutate(is_revenge = ifelse(game_id == ad_revenge_game$game_id, 1, 0))
+  
+
+library(dplyr)
+library(MatchIt)
+library(janitor)
+
+# Load AD Lakers games
+ad_all <- box %>%
+  filter(
+    athlete_display_name == "Anthony Davis",
+    team_name == "Lakers",
+    season >= 2020
+  ) %>%
+  arrange(game_date)
+
+# Identify first revenge game vs Pelicans
+ad_revenge_game <- ad_all %>%
+  filter(opponent_team_name == "Pelicans") %>%
+  arrange(game_date) %>%
+  slice(1)
+
+# Mark revenge game
+ad_all <- ad_all %>%
+  mutate(is_revenge = ifelse(game_id == ad_revenge_game$game_id, 1, 0))
+
+# Build opponent strength
+team_games <- load_nba_team_box(seasons = 2003:2024) %>% clean_names()
+
+opp_records <- team_games %>%
+  group_by(team_name, season) %>%
+  summarise(opp_win_pct = mean(team_winner == FALSE), .groups = "drop")
+
+ad_all <- ad_all %>%
+  left_join(
+    opp_records,
+    by = c("opponent_team_name" = "team_name",
+           "season" = "season")
+  )
+
+# Prepare for MatchIt
+match_df <- ad_all %>%
+  select(
+    is_revenge, minutes, field_goals_attempted, home_away, opp_win_pct,
+    points, rebounds, assists, game_id, game_date
+  ) %>%
+  drop_na()
+
+# Run MatchIt
+m <- matchit(
+  is_revenge ~ minutes + field_goals_attempted + home_away + opp_win_pct,
+  data = match_df,
+  method = "nearest",
+  ratio = 5
+)
+
+matched_data <- match.data(m)
+
+comparison_revenge <- matched_data %>% filter(is_revenge == 1)
+comparison_games   <- matched_data %>% filter(is_revenge == 0)
+
+# Print for PDF
+comparison_revenge %>%
+  select(game_date, points, rebounds, assists, minutes, field_goals_attempted, opp_win_pct)
+
+comparison_games %>%
+  select(game_date, points, rebounds, assists, minutes, field_goals_attempted, opp_win_pct)
+
+
+```
+
+```{r}
+library(dplyr)
+library(MatchIt)
+library(janitor)
+
+
+# 1. Load AD Lakers games
+
+ad_all <- box %>%
+  
+  filter(
+    athlete_display_name == "James Harden",
+    team_name == "Nets",
+    season == 2021
+  ) %>%
+  arrange(game_date)
+
+ad_all <- ad_all %>%
+  filter(minutes > 0)
+
+# 2. Identify ALL revenge games vs Pelicans
+
+ad_revenge_games <- ad_all %>%
+  filter(opponent_team_name == "Rockets") %>%
+  arrange(game_date)
+
+# Mark all revenge games
+ad_all <- ad_all %>%
+  mutate(is_revenge = ifelse(game_id %in% ad_revenge_games$game_id, 1, 0))
+
+# 3. Build opponent strength
+
+team_games <- load_nba_team_box(seasons = 2003:2024) %>% clean_names()
+
+opp_records <- team_games %>%
+  group_by(team_name, season) %>%
+  summarise(opp_win_pct = mean(team_winner == FALSE), .groups = "drop")
+
+ad_all <- ad_all %>%
+  left_join(
+    opp_records,
+    by = c("opponent_team_name" = "team_name",
+           "season" = "season")
+  )
+
+# 4. Prepare data for MatchIt
+
+match_df <- ad_all %>%
+  select(
+    is_revenge, minutes, field_goals_attempted, home_away, opp_win_pct,
+    points, rebounds, assists, game_id, game_date
+  ) %>%
+  drop_na()
+
+
+# 5. Run MatchIt
+#    (ratio = number of matched games per revenge game)
+
+m <- matchit(
+  is_revenge ~ minutes + field_goals_attempted + home_away + opp_win_pct,
+  data = match_df,
+  method = "nearest",
+  ratio = 1
+)
+
+matched_data <- match.data(m)
+
+
+# 6. Separate matched revenge vs matched control games
+
+comparison_revenge <- matched_data %>% filter(is_revenge == 1)
+comparison_games   <- matched_data %>% filter(is_revenge == 0)
+
+
+# 7. Print for PDF output
+
+comparison_revenge %>%
+  select(game_date, points, rebounds, assists, minutes,
+         field_goals_attempted, opp_win_pct)
+
+comparison_games %>%
+  select(game_date, points, rebounds, assists, minutes,
+         field_goals_attempted, opp_win_pct)
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Compute averages
+rev_avg <- comparison_revenge %>%
+  summarise(
+    points = mean(points),
+    rebounds = mean(rebounds),
+    assists = mean(assists)
+  ) %>%
+  mutate(type = "Revenge")
+
+match_avg <- comparison_games %>%
+  summarise(
+    points = mean(points),
+    rebounds = mean(rebounds),
+    assists = mean(assists)
+  ) %>%
+  mutate(type = "Matched")
+
+# Combine into tidy format
+df_plot <- bind_rows(rev_avg, match_avg) %>%
+  pivot_longer(cols = points:assists, names_to = "stat", values_to = "value")
+
+# Plot
+ggplot(df_plot, aes(x = stat, y = value, fill = type)) +
+  geom_col(position = "dodge", width = 0.7) +
+  geom_text(aes(label = round(value, 1)),
+            position = position_dodge(width = 0.7),
+            vjust = -0.5, size = 4) +
+  labs(
+    title = "Anthony Davis: Revenge Games vs Matched Games",
+    x = "",
+    y = "Average Value"
+  ) +
+  scale_fill_manual(values = c("Matched" = "#FF6B6B", "Revenge" = "#4D96FF")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.title = element_blank())
+
+```
+
+
+
+
+
+
+
